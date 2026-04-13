@@ -1,0 +1,13 @@
+[package]
+name = "oxyclick"
+version = "0.1.0"
+edition = "2021"
+description = "A Windows-focused mouse and keyboard auto clicker scaffold written in Rust."
+license = "MIT"
+publish = false
+
+[dependencies]
+eframe = "0.28"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
