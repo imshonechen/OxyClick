@@ -90,6 +90,7 @@ impl Default for WindowsInputBackend {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotkeyCapture {
     pub label: String,
+    pub has_non_modifier_key: bool,
 }
 
 impl InputBackend for WindowsInputBackend {
@@ -334,6 +335,23 @@ fn canonical_hotkey_label(parts: &[u16]) -> String {
         .join("+")
 }
 
+fn is_capture_modifier_virtual_key(virtual_key: u16) -> bool {
+    matches!(virtual_key, 0x10 | 0x11 | 0x12 | 0x5B)
+}
+
+fn build_hotkey_capture(keys: &[u16]) -> Option<HotkeyCapture> {
+    if keys.is_empty() {
+        return None;
+    }
+
+    Some(HotkeyCapture {
+        label: canonical_hotkey_label(keys),
+        has_non_modifier_key: keys
+            .iter()
+            .any(|virtual_key| !is_capture_modifier_virtual_key(*virtual_key)),
+    })
+}
+
 fn canonical_virtual_key_name(virtual_key: u16) -> Option<String> {
     match virtual_key {
         0x08 => Some(String::from("Backspace")),
@@ -409,13 +427,7 @@ fn poll_windows_hotkey_capture() -> Option<HotkeyCapture> {
         }
     }
 
-    if keys.is_empty() {
-        return None;
-    }
-
-    Some(HotkeyCapture {
-        label: canonical_hotkey_label(&keys),
-    })
+    build_hotkey_capture(&keys)
 }
 
 #[cfg(windows)]
@@ -495,7 +507,7 @@ fn parse_function_key(name: &str) -> Option<u16> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{parse_virtual_key, pressed_keys_contain_virtual_key};
+    use super::{build_hotkey_capture, parse_virtual_key, pressed_keys_contain_virtual_key};
 
     #[test]
     fn parses_alpha_keys() {
@@ -537,5 +549,21 @@ mod tests {
         assert!(pressed_keys_contain_virtual_key(&pressed_keys, 0x12));
         assert!(pressed_keys_contain_virtual_key(&pressed_keys, 0x5B));
         assert!(!pressed_keys_contain_virtual_key(&pressed_keys, 0x10));
+    }
+
+    #[test]
+    fn modifier_only_capture_is_not_committable() {
+        let capture = build_hotkey_capture(&[0x11, 0x12]).expect("capture should exist");
+
+        assert_eq!(capture.label, "Ctrl+Alt");
+        assert!(!capture.has_non_modifier_key);
+    }
+
+    #[test]
+    fn combo_capture_with_primary_key_is_committable() {
+        let capture = build_hotkey_capture(&[0x11, 0x12, 0x4B]).expect("capture should exist");
+
+        assert_eq!(capture.label, "Ctrl+Alt+K");
+        assert!(capture.has_non_modifier_key);
     }
 }

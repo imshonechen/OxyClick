@@ -14,13 +14,14 @@ use crate::core::state::EngineState;
 use crate::core::validate::validate_config;
 use crate::engine::runner::EngineRunner;
 use crate::error::AppError;
+use crate::platform::windows::focus::current_foreground_window;
 use crate::platform::windows::hotkey::{GlobalHotkeyManager, HotkeyRegistration};
 use crate::platform::windows::input::{poll_hotkey_capture, BackendMode, WindowsInputBackend};
 use crate::ui::panels::{render_status_panel, StatusPanelData};
 use crate::ui::theme;
 use crate::ui::widgets::{
     card_with_body_spacing_and_min_height_and_metrics, form_grid, form_note_row, form_row,
-    hotkey_capture_field, number_field, number_row, text_row,
+    hotkey_capture_field, number_field, number_row,
 };
 
 const DEFAULT_WINDOW_WIDTH: f32 = 1120.0;
@@ -48,6 +49,7 @@ pub struct Application {
     profile_editor_actual_height: f32,
     hotkeys_actual_height: f32,
     capture_state: Option<ShortcutCaptureState>,
+    focus_stop_guard: Option<FocusStopGuard>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +97,13 @@ struct UiNotification {
 struct ShortcutCaptureState {
     target: CaptureTarget,
     preview_label: Option<String>,
+    last_valid_label: Option<String>,
     saw_pressed_keys: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FocusStopGuard {
+    target_window_handle: Option<isize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,6 +174,7 @@ impl Application {
             profile_editor_actual_height: 0.0,
             hotkeys_actual_height: 0.0,
             capture_state: None,
+            focus_stop_guard: None,
         })
     }
 
@@ -332,6 +341,27 @@ impl Application {
         }
     }
 
+    fn arm_focus_stop_guard(&mut self) {
+        let target_window_handle = if self.runtime_profile().stop_on_focus_lost {
+            current_foreground_window()
+                .filter(|window| !window.belongs_to_current_process())
+                .map(|window| window.handle)
+        } else {
+            None
+        };
+
+        self.focus_stop_guard =
+            self.runtime_profile()
+                .stop_on_focus_lost
+                .then_some(FocusStopGuard {
+                    target_window_handle,
+                });
+    }
+
+    fn clear_focus_stop_guard(&mut self) {
+        self.focus_stop_guard = None;
+    }
+
     fn start_engine_now(&mut self) {
         self.delayed_start_at = None;
         match self.sync_runtime_config() {
@@ -344,8 +374,10 @@ impl Application {
                         self.started_running_at = Some(started_at);
                         self.last_run_duration = Duration::ZERO;
                         self.last_completed_actions = 0;
+                        self.arm_focus_stop_guard();
                     }
                     Err(error) => {
+                        self.clear_focus_stop_guard();
                         self.push_notification(
                             NotificationKind::Error,
                             format!("无法开始运行：{error}"),
@@ -354,6 +386,7 @@ impl Application {
                 }
             }
             Err(error) => {
+                self.clear_focus_stop_guard();
                 self.live_config_error = Some(error.to_string());
                 self.push_notification(NotificationKind::Error, format!("无法开始运行：{error}"));
             }
@@ -386,6 +419,7 @@ impl Application {
         self.delayed_start_at = None;
         self.last_tick_at = None;
         self.started_running_at = None;
+        self.clear_focus_stop_guard();
         self.reconcile_live_config();
     }
 
@@ -472,6 +506,7 @@ impl Application {
         self.capture_state = Some(ShortcutCaptureState {
             target,
             preview_label: None,
+            last_valid_label: None,
             saw_pressed_keys: false,
         });
     }
@@ -530,6 +565,36 @@ impl Application {
         }
     }
 
+    fn advance_capture_state(
+        capture: &mut ShortcutCaptureState,
+        snapshot: Option<crate::platform::windows::input::HotkeyCapture>,
+    ) -> Option<(CaptureTarget, String)> {
+        match snapshot {
+            Some(chord) => {
+                capture.saw_pressed_keys = true;
+
+                if chord.has_non_modifier_key {
+                    capture.preview_label = Some(chord.label.clone());
+                    capture.last_valid_label = Some(chord.label);
+                } else if capture.last_valid_label.is_none() {
+                    capture.preview_label = Some(chord.label);
+                }
+
+                None
+            }
+            None if capture.saw_pressed_keys => {
+                if let Some(label) = capture.last_valid_label.clone() {
+                    Some((capture.target, label))
+                } else {
+                    capture.preview_label = None;
+                    capture.saw_pressed_keys = false;
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+
     fn update_capture_state(&mut self, ctx: &egui::Context) {
         if self.capture_state.is_none() {
             return;
@@ -541,19 +606,7 @@ impl Application {
         let mut completed_capture = None;
 
         if let Some(capture) = &mut self.capture_state {
-            match snapshot {
-                Some(chord) => {
-                    capture.preview_label = Some(chord.label);
-                    capture.saw_pressed_keys = true;
-                }
-                None if capture.saw_pressed_keys => {
-                    completed_capture = capture
-                        .preview_label
-                        .clone()
-                        .map(|label| (capture.target, label));
-                }
-                None => {}
-            }
+            completed_capture = Self::advance_capture_state(capture, snapshot);
         }
 
         if let Some((target, label)) = completed_capture {
@@ -622,6 +675,45 @@ impl Application {
         }
     }
 
+    fn pump_focus_stop_guard(&mut self, ctx: &egui::Context) {
+        if !self.is_running() {
+            self.clear_focus_stop_guard();
+            return;
+        }
+
+        let Some(mut guard) = self.focus_stop_guard else {
+            return;
+        };
+
+        ctx.request_repaint_after(Duration::from_millis(100));
+
+        let current_window = current_foreground_window();
+
+        if guard.target_window_handle.is_none() {
+            if let Some(window) =
+                current_window.filter(|window| !window.belongs_to_current_process())
+            {
+                guard.target_window_handle = Some(window.handle);
+                self.focus_stop_guard = Some(guard);
+            }
+            return;
+        }
+
+        self.focus_stop_guard = Some(guard);
+
+        if current_window.map(|window| window.handle) != guard.target_window_handle {
+            let completed_actions = self.engine.completed_actions();
+            self.stop_engine();
+            self.push_notification(
+                NotificationKind::Info,
+                format!(
+                    "目标窗口失去焦点，已自动停止。本次一共执行了 {} 次。",
+                    completed_actions
+                ),
+            );
+        }
+    }
+
     fn pump_engine(&mut self, ctx: &egui::Context) {
         if !self.is_running() {
             return;
@@ -640,6 +732,7 @@ impl Application {
                         self.snapshot_last_run_metrics();
                         self.last_tick_at = None;
                         self.started_running_at = None;
+                        self.clear_focus_stop_guard();
                         self.reconcile_live_config();
                         self.push_notification(
                             NotificationKind::Info,
@@ -844,8 +937,6 @@ impl Application {
             |ui| {
                 ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
                 form_grid(ui, "profile_editor_grid", |ui| {
-                    text_row(ui, "名称", &mut profile.name, "默认配置");
-
                     form_row(ui, "触发模式", |ui| {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -980,7 +1071,7 @@ impl Application {
 
                             form_note_row(
                                 ui,
-                                "单键和组合键统一在这里录制。\n点击输入框后直接按键，点击其他位置可取消。",
+                                "单键和组合键统一在这里录制。\n单独按 Ctrl / Alt / Shift / Win 不会保存；需要再配合其他键。\n点击输入框后直接按键，点击其他位置可取消。",
                             );
                         }
                     }
@@ -1130,7 +1221,7 @@ impl Application {
 
                     form_note_row(
                         ui,
-                        "点击输入框后直接按下快捷键。\n再次点击当前输入框或点击其他位置可取消录制，紧急停止支持清空。",
+                        "点击输入框后直接按下快捷键。\n单独按 Ctrl / Alt / Shift / Win 不会保存；需要再配合其他键。\n再次点击当前输入框或点击其他位置可取消录制，紧急停止支持清空。",
                     );
 
                     form_row(ui, "安全选项", |ui| {
@@ -1359,6 +1450,80 @@ fn load_cjk_font_bytes() -> Option<Vec<u8>> {
     candidates.iter().find_map(|path| fs::read(path).ok())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{Application, CaptureTarget, HotkeyField, ShortcutCaptureState};
+    use crate::platform::windows::input::HotkeyCapture;
+
+    #[test]
+    fn capture_keeps_last_valid_combo_until_release() {
+        let mut capture = ShortcutCaptureState {
+            target: CaptureTarget::Hotkey(HotkeyField::Start),
+            preview_label: None,
+            last_valid_label: None,
+            saw_pressed_keys: false,
+        };
+
+        assert_eq!(
+            Application::advance_capture_state(
+                &mut capture,
+                Some(HotkeyCapture {
+                    label: String::from("Ctrl+Alt+K"),
+                    has_non_modifier_key: true,
+                }),
+            ),
+            None
+        );
+        assert_eq!(capture.preview_label.as_deref(), Some("Ctrl+Alt+K"));
+
+        assert_eq!(
+            Application::advance_capture_state(
+                &mut capture,
+                Some(HotkeyCapture {
+                    label: String::from("Ctrl+Alt"),
+                    has_non_modifier_key: false,
+                }),
+            ),
+            None
+        );
+        assert_eq!(capture.preview_label.as_deref(), Some("Ctrl+Alt+K"));
+
+        assert_eq!(
+            Application::advance_capture_state(&mut capture, None),
+            Some((
+                CaptureTarget::Hotkey(HotkeyField::Start),
+                String::from("Ctrl+Alt+K")
+            ))
+        );
+    }
+
+    #[test]
+    fn modifier_only_capture_does_not_commit() {
+        let mut capture = ShortcutCaptureState {
+            target: CaptureTarget::Action,
+            preview_label: None,
+            last_valid_label: None,
+            saw_pressed_keys: false,
+        };
+
+        assert_eq!(
+            Application::advance_capture_state(
+                &mut capture,
+                Some(HotkeyCapture {
+                    label: String::from("Ctrl+Shift"),
+                    has_non_modifier_key: false,
+                }),
+            ),
+            None
+        );
+        assert_eq!(capture.preview_label.as_deref(), Some("Ctrl+Shift"));
+
+        assert_eq!(Application::advance_capture_state(&mut capture, None), None);
+        assert_eq!(capture.preview_label, None);
+        assert!(capture.last_valid_label.is_none());
+    }
+}
+
 impl eframe::App for Application {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.expire_notification();
@@ -1373,6 +1538,7 @@ impl eframe::App for Application {
         }
 
         self.process_delayed_start(ctx);
+        self.pump_focus_stop_guard(ctx);
         self.pump_engine(ctx);
 
         if self.save_button_feedback_started_at.is_some() {
