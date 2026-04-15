@@ -5,6 +5,11 @@ edition = "2021"
 description = "A Windows-focused mouse and keyboard auto clicker scaffold written in Rust."
 license = "MIT"
 publish = false
+build = "build.rs"
+
+[build-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["ico"] }
+winres = "0.1"
 
 [dependencies]
 eframe = "0.28"

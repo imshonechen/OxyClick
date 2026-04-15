@@ -1475,7 +1475,8 @@ pub fn run() -> Result<(), AppError> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT])
-            .with_min_inner_size([MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT]),
+            .with_min_inner_size([MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT])
+            .with_icon(load_window_icon()),
         ..Default::default()
     };
 
@@ -1544,6 +1545,8 @@ fn load_cjk_font_bytes() -> Option<Vec<u8>> {
 
     candidates.iter().find_map(|path| fs::read(path).ok())
 }
+
+include!(concat!(env!("OUT_DIR"), "/app_icon.rs"));
 
 #[cfg(test)]
 mod tests {
