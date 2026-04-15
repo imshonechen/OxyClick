@@ -181,10 +181,10 @@ pub struct ClickTaskConfig {
 - `trigger_mode = Toggle`
 - `run_mode = Infinite`
 - `action = MouseClick(Left)`
-- `start_delay_ms = 700`
-- `interval_ms = 25`
-- `press_duration_ms = 5`
-- `jitter_ms = Some(0)`
+- `start_delay_ms = 3000`
+- `interval_ms = 100`
+- `press_duration_ms = 10`
+- `jitter_ms = Some(10)`
 - `stop_on_focus_lost = true`
 
 ### 5.6 全局配置
@@ -246,10 +246,10 @@ stop_on_focus_lost = true
 [[profiles]]
 name = "默认配置"
 trigger_mode = "toggle"
-start_delay_ms = 700
-interval_ms = 25
-press_duration_ms = 5
-jitter_ms = 0
+start_delay_ms = 3000
+interval_ms = 100
+press_duration_ms = 10
+jitter_ms = 10
 stop_on_focus_lost = true
 
 [profiles.run_mode]

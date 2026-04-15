@@ -96,11 +96,11 @@ impl Default for ClickTaskConfig {
             action: InputAction::MouseClick {
                 button: MouseButton::Left,
             },
-            start_delay_ms: 700,
-            interval_ms: 25,
-            press_duration_ms: 5,
+            start_delay_ms: 3000,
+            interval_ms: 100,
+            press_duration_ms: 10,
             hotkeys: HotkeyBindings::default(),
-            jitter_ms: Some(0),
+            jitter_ms: Some(10),
             stop_on_focus_lost: true,
         }
     }

@@ -390,6 +390,7 @@ mod tests {
         let mut config = ClickTaskConfig::default();
         config.interval_ms = 1;
         config.press_duration_ms = 0;
+        config.jitter_ms = Some(0);
         config.run_mode = RunMode::Count { total: 1 };
 
         let mut runner = EngineRunner::new(NoopInputBackend::default());

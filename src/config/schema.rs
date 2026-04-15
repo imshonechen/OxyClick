@@ -163,7 +163,7 @@ panic = "Ctrl+Alt+Pause"
         let profile = config.active_profile();
 
         assert_eq!(profile.name, "默认配置");
-        assert_eq!(profile.start_delay_ms, 700);
+        assert_eq!(profile.start_delay_ms, 3000);
         assert_eq!(profile.hotkeys.panic.as_deref(), Some("Ctrl+Alt+Pause"));
     }
 }
