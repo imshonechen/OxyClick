@@ -1,7 +1,6 @@
 active_profile_index = 0
 
 [general]
-launch_on_startup = false
 stop_on_focus_lost = true
 
 [[profiles]]

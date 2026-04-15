@@ -7,14 +7,12 @@ use crate::error::AppError;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneralConfig {
-    pub launch_on_startup: bool,
     pub stop_on_focus_lost: bool,
 }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
-            launch_on_startup: false,
             stop_on_focus_lost: true,
         }
     }

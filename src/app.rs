@@ -12,7 +12,7 @@ use crate::config::schema::AppConfig;
 use crate::core::model::{ClickTaskConfig, InputAction, MouseButton, RunMode, TriggerMode};
 use crate::core::state::EngineState;
 use crate::core::validate::validate_config;
-use crate::engine::runner::EngineRunner;
+use crate::engine::runner::{EngineEvent, EngineRunner};
 use crate::error::AppError;
 use crate::platform::windows::focus::current_foreground_window;
 use crate::platform::windows::hotkey::{GlobalHotkeyManager, HotkeyRegistration};
@@ -43,7 +43,6 @@ pub struct Application {
     save_button_feedback_started_at: Option<Instant>,
     delayed_start_at: Option<Instant>,
     pending_action: Option<PendingUiAction>,
-    last_tick_at: Option<Instant>,
     started_running_at: Option<Instant>,
     last_run_duration: Duration,
     last_completed_actions: u64,
@@ -169,7 +168,6 @@ impl Application {
             save_button_feedback_started_at: None,
             delayed_start_at: None,
             pending_action: None,
-            last_tick_at: None,
             started_running_at: None,
             last_run_duration: Duration::ZERO,
             last_completed_actions: 0,
@@ -185,7 +183,7 @@ impl Application {
         let profile = self.runtime_profile();
 
         format!(
-            "OxyClick 已启动。\n当前配置：{}\n引擎状态：{}\n输入后端：{}\n热键配置：{}\n热键后端：{}\n下一步：继续增加预设管理和更丰富的诊断信息。",
+            "OxyClick 已启动。\n当前配置：{}\n引擎状态：{}\n输入后端：{}\n热键配置：{}\n热键后端：{}\n下一步：继续完善预设管理和输入动作能力。",
             profile.name,
             self.engine.state(),
             self.backend_mode.label(),
@@ -195,17 +193,17 @@ impl Application {
     }
 
     fn is_running(&self) -> bool {
-        self.engine.state() == &EngineState::Running
+        self.engine.state() == EngineState::Running
     }
 
     fn has_pending_start(&self) -> bool {
         self.delayed_start_at.is_some()
     }
 
-    fn runtime_profile(&self) -> &ClickTaskConfig {
+    fn runtime_profile(&self) -> ClickTaskConfig {
         self.engine
             .config()
-            .unwrap_or_else(|| self.config.active_profile())
+            .unwrap_or_else(|| self.config.active_profile().clone())
     }
 
     fn pending_start_remaining(&self) -> Option<Duration> {
@@ -296,9 +294,13 @@ impl Application {
     }
 
     fn displayed_run_duration(&self) -> Duration {
-        self.started_running_at
-            .map(|started_at| started_at.elapsed())
-            .unwrap_or(self.last_run_duration)
+        if self.is_running() {
+            self.started_running_at
+                .map(|started_at| started_at.elapsed())
+                .unwrap_or(Duration::ZERO)
+        } else {
+            self.last_run_duration
+        }
     }
 
     fn format_elapsed_duration(duration: Duration) -> String {
@@ -327,7 +329,6 @@ impl Application {
 
         if !self.is_running() {
             self.engine.arm(profile)?;
-            self.last_tick_at = None;
         }
 
         Ok(())
@@ -373,7 +374,6 @@ impl Application {
                 match self.engine.start() {
                     Ok(()) => {
                         let started_at = Instant::now();
-                        self.last_tick_at = Some(started_at);
                         self.started_running_at = Some(started_at);
                         self.last_run_duration = Duration::ZERO;
                         self.last_completed_actions = 0;
@@ -416,14 +416,53 @@ impl Application {
         self.start_engine_now();
     }
 
-    fn stop_engine(&mut self) {
+    fn stop_engine(&mut self) -> bool {
+        if let Err(error) = self.engine.stop() {
+            self.push_notification(NotificationKind::Error, format!("停止失败：{error}"));
+            return false;
+        }
+
         self.snapshot_last_run_metrics();
-        self.engine.stop();
         self.delayed_start_at = None;
-        self.last_tick_at = None;
         self.started_running_at = None;
         self.clear_focus_stop_guard();
         self.reconcile_live_config();
+        true
+    }
+
+    fn finish_run_observation(&mut self, completed_actions: u64) {
+        self.last_completed_actions = completed_actions;
+        self.last_run_duration = self
+            .started_running_at
+            .map(|started_at| started_at.elapsed())
+            .unwrap_or(Duration::ZERO);
+        self.started_running_at = None;
+        self.clear_focus_stop_guard();
+        self.reconcile_live_config();
+    }
+
+    fn pump_engine_events(&mut self) {
+        while let Some(event) = self.engine.poll_event() {
+            match event {
+                EngineEvent::Completed { completed_actions } => {
+                    self.finish_run_observation(completed_actions);
+                    self.push_notification(
+                        NotificationKind::Info,
+                        format!("运行结束，共执行 {} 次。", completed_actions),
+                    );
+                }
+                EngineEvent::Failed {
+                    message,
+                    completed_actions,
+                } => {
+                    self.finish_run_observation(completed_actions);
+                    self.push_notification(
+                        NotificationKind::Error,
+                        format!("执行循环出错：{message}"),
+                    );
+                }
+            }
+        }
     }
 
     fn cancel_delayed_start(&mut self) {
@@ -686,12 +725,10 @@ impl Application {
         match action {
             PendingUiAction::Start => self.start_engine(StartOrigin::UiButton),
             PendingUiAction::Stop => {
-                if self.is_running() && self.can_accept_stop() {
-                    let completed_actions = self.engine.completed_actions();
-                    self.stop_engine();
+                if self.is_running() && self.can_accept_stop() && self.stop_engine() {
                     self.push_notification(
                         NotificationKind::Info,
-                        format!("已停止。本次一共执行了 {} 次。", completed_actions),
+                        format!("已停止。本次一共执行了 {} 次。", self.last_completed_actions),
                     );
                 }
             }
@@ -740,59 +777,16 @@ impl Application {
 
         self.focus_stop_guard = Some(guard);
 
-        if current_window.map(|window| window.handle) != guard.target_window_handle {
-            let completed_actions = self.engine.completed_actions();
-            self.stop_engine();
+        if current_window.map(|window| window.handle) != guard.target_window_handle
+            && self.stop_engine()
+        {
             self.push_notification(
                 NotificationKind::Info,
                 format!(
                     "目标窗口失去焦点，已自动停止。本次一共执行了 {} 次。",
-                    completed_actions
+                    self.last_completed_actions
                 ),
             );
-        }
-    }
-
-    fn pump_engine(&mut self, ctx: &egui::Context) {
-        if !self.is_running() {
-            return;
-        }
-
-        let interval = Duration::from_millis(self.runtime_profile().interval_ms.max(1));
-        let now = Instant::now();
-        let last_tick = self.last_tick_at.unwrap_or(now - interval);
-        let elapsed = now.saturating_duration_since(last_tick);
-
-        if elapsed >= interval {
-            match self.engine.tick() {
-                Ok(true) => {
-                    self.last_tick_at = Some(now);
-                    if !self.is_running() {
-                        self.snapshot_last_run_metrics();
-                        self.last_tick_at = None;
-                        self.started_running_at = None;
-                        self.clear_focus_stop_guard();
-                        self.reconcile_live_config();
-                        self.push_notification(
-                            NotificationKind::Info,
-                            format!("运行结束，共执行 {} 次。", self.last_completed_actions),
-                        );
-                    }
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    self.last_tick_at = None;
-                    self.push_notification(
-                        NotificationKind::Error,
-                        format!("执行循环出错：{error}"),
-                    );
-                }
-            }
-        }
-
-        if self.is_running() {
-            let remaining = interval.saturating_sub(elapsed);
-            ctx.request_repaint_after(remaining);
         }
     }
 
@@ -809,20 +803,22 @@ impl Application {
         let trigger_mode = self.config.active_profile().trigger_mode;
 
         if snapshot.panic_pressed {
-            self.stop_engine();
-            self.push_notification(
-                NotificationKind::Error,
-                match self.hotkeys.panic_label() {
-                    Some(label) => format!("已触发紧急停止：{label}"),
-                    None => String::from("已触发紧急停止。"),
-                },
-            );
+            if self.stop_engine() {
+                self.push_notification(
+                    NotificationKind::Error,
+                    match self.hotkeys.panic_label() {
+                        Some(label) => format!("已触发紧急停止：{label}"),
+                        None => String::from("已触发紧急停止。"),
+                    },
+                );
+            }
             return;
         }
 
         if snapshot.stop_pressed && self.is_running() && self.can_accept_stop() {
-            self.stop_engine();
-            self.push_notification(NotificationKind::Info, "已通过全局停止热键结束运行。");
+            if self.stop_engine() {
+                self.push_notification(NotificationKind::Info, "已通过全局停止热键结束运行。");
+            }
             return;
         }
 
@@ -836,8 +832,12 @@ impl Application {
                 if snapshot.start_pressed && !self.is_running() {
                     self.start_engine(StartOrigin::Hotkey);
                 } else if !snapshot.start_down && self.is_running() && self.can_accept_stop() {
-                    self.stop_engine();
-                    self.push_notification(NotificationKind::Info, "已松开按住热键，运行已停止。");
+                    if self.stop_engine() {
+                        self.push_notification(
+                            NotificationKind::Info,
+                            "已松开按住热键，运行已停止。",
+                        );
+                    }
                 }
             }
         }
@@ -1621,13 +1621,13 @@ impl eframe::App for Application {
 
         self.process_delayed_start(ctx);
         self.pump_focus_stop_guard(ctx);
-        self.pump_engine(ctx);
+        self.pump_engine_events();
 
-        if self.save_button_feedback_started_at.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(16));
-        }
-
-        if !self.is_running() {
+        if self.save_button_feedback_started_at.is_some()
+            || self.is_running()
+            || self.has_pending_start()
+            || self.notification.is_some()
+        {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
 
