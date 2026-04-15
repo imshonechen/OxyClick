@@ -91,6 +91,7 @@ impl Default for WindowsInputBackend {
 pub struct HotkeyCapture {
     pub label: String,
     pub has_non_modifier_key: bool,
+    pub is_valid_binding: bool,
 }
 
 impl InputBackend for WindowsInputBackend {
@@ -335,20 +336,86 @@ fn canonical_hotkey_label(parts: &[u16]) -> String {
         .join("+")
 }
 
-fn is_capture_modifier_virtual_key(virtual_key: u16) -> bool {
-    matches!(virtual_key, 0x10 | 0x11 | 0x12 | 0x5B)
+pub fn is_modifier_virtual_key(virtual_key: u16) -> bool {
+    matches!(
+        virtual_key,
+        0x10 | 0x11 | 0x12 | 0x5B | 0x5C | 0xA0 | 0xA1 | 0xA2 | 0xA3 | 0xA4 | 0xA5
+    )
+}
+
+pub fn is_bindable_virtual_key(virtual_key: u16) -> bool {
+    !matches!(virtual_key, 0x09 | 0x1B)
+}
+
+pub fn validate_bindable_input_action(action: &InputAction) -> Result<(), AppError> {
+    match action {
+        InputAction::MouseClick { .. } => Ok(()),
+        InputAction::KeyPress { key_code } => {
+            let virtual_key = validate_bindable_key_name(key_code, "键盘动作")?;
+            if is_modifier_virtual_key(virtual_key) {
+                return Err(AppError::InvalidConfig(String::from(
+                    "键盘动作不能只使用 Ctrl / Alt / Shift / Win，至少要有一个常规键",
+                )));
+            }
+            Ok(())
+        }
+        InputAction::KeyCombo {
+            modifiers,
+            key_code,
+        } => {
+            for modifier in modifiers {
+                let modifier_key = validate_bindable_key_name(modifier, "键盘动作")?;
+                if !is_modifier_virtual_key(modifier_key) {
+                    return Err(AppError::InvalidConfig(format!(
+                        "键盘动作里只能让 Ctrl / Alt / Shift / Win 作为组合修饰键：{modifier}",
+                    )));
+                }
+            }
+            let primary_key = validate_bindable_key_name(key_code, "键盘动作")?;
+            if is_modifier_virtual_key(primary_key) {
+                return Err(AppError::InvalidConfig(String::from(
+                    "键盘动作组合里必须且只能有一个常规键，Ctrl / Alt / Shift / Win 只能作为修饰键",
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_bindable_key_name(name: &str, context: &str) -> Result<u16, AppError> {
+    let token = name.trim();
+    let virtual_key = parse_virtual_key(token)
+        .ok_or_else(|| AppError::InvalidConfig(format!("{context}里包含不支持的按键：{token}")))?;
+
+    if !is_bindable_virtual_key(virtual_key) {
+        return Err(AppError::InvalidConfig(format!(
+            "{context}不支持设置该按键：{token}",
+        )));
+    }
+
+    Ok(virtual_key)
 }
 
 fn build_hotkey_capture(keys: &[u16]) -> Option<HotkeyCapture> {
-    if keys.is_empty() {
+    let filtered_keys: Vec<u16> = keys
+        .iter()
+        .copied()
+        .filter(|virtual_key| is_bindable_virtual_key(*virtual_key))
+        .collect();
+
+    if filtered_keys.is_empty() {
         return None;
     }
 
+    let non_modifier_key_count = filtered_keys
+        .iter()
+        .filter(|virtual_key| !is_modifier_virtual_key(**virtual_key))
+        .count();
+
     Some(HotkeyCapture {
-        label: canonical_hotkey_label(keys),
-        has_non_modifier_key: keys
-            .iter()
-            .any(|virtual_key| !is_capture_modifier_virtual_key(*virtual_key)),
+        label: canonical_hotkey_label(&filtered_keys),
+        has_non_modifier_key: non_modifier_key_count > 0,
+        is_valid_binding: non_modifier_key_count == 1,
     })
 }
 
@@ -375,6 +442,12 @@ fn canonical_virtual_key_name(virtual_key: u16) -> Option<String> {
         0x2D => Some(String::from("Insert")),
         0x2E => Some(String::from("Delete")),
         0x5B => Some(String::from("Win")),
+        0x60..=0x69 => Some(format!("Num{}", virtual_key - 0x60)),
+        0x6A => Some(String::from("Num*")),
+        0x6B => Some(String::from("NumAdd")),
+        0x6D => Some(String::from("Num-")),
+        0x6E => Some(String::from("Num.")),
+        0x6F => Some(String::from("Num/")),
         0x70 => Some(String::from("F1")),
         0x71 => Some(String::from("F2")),
         0x72 => Some(String::from("F3")),
@@ -399,6 +472,17 @@ fn canonical_virtual_key_name(virtual_key: u16) -> Option<String> {
         0x85 => Some(String::from("F22")),
         0x86 => Some(String::from("F23")),
         0x87 => Some(String::from("F24")),
+        0xBA => Some(String::from(";")),
+        0xBB => Some(String::from("=")),
+        0xBC => Some(String::from(",")),
+        0xBD => Some(String::from("-")),
+        0xBE => Some(String::from(".")),
+        0xBF => Some(String::from("/")),
+        0xC0 => Some(String::from("`")),
+        0xDB => Some(String::from("[")),
+        0xDC => Some(String::from("\\")),
+        0xDD => Some(String::from("]")),
+        0xDE => Some(String::from("'")),
         0x30..=0x39 | 0x41..=0x5A => Some(char::from_u32(u32::from(virtual_key))?.to_string()),
         _ => None,
     }
@@ -433,12 +517,13 @@ fn poll_windows_hotkey_capture() -> Option<HotkeyCapture> {
 #[cfg(windows)]
 fn hotkey_capture_scan_keys() -> &'static [u16] {
     &[
-        0x08, 0x09, 0x0D, 0x13, 0x1B, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2C,
-        0x2D, 0x2E, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x41, 0x42, 0x43,
-        0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52,
-        0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76,
-        0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85,
-        0x86, 0x87,
+        0x08, 0x0D, 0x13, 0x1B, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2C, 0x2D,
+        0x2E, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x41, 0x42, 0x43, 0x44,
+        0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53,
+        0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67,
+        0x68, 0x69, 0x6A, 0x6B, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+        0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86,
+        0x87, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xDB, 0xDC, 0xDD, 0xDE,
     ]
 }
 
@@ -486,10 +571,42 @@ pub fn parse_virtual_key(name: &str) -> Option<u16> {
         "ALT" | "MENU" | "替代" => Some(0x12),
         "CAPSLOCK" | "大写锁定" => Some(0x14),
         "PAUSE" | "暂停" => Some(0x13),
+        "=" | "EQUAL" | "EQUALS" | "等号" => Some(0xBB),
+        "-" | "MINUS" | "HYPHEN" | "DASH" | "减号" => Some(0xBD),
+        ";" | "；" | "SEMICOLON" | "分号" => Some(0xBA),
+        "'" | "APOSTROPHE" | "QUOTE" | "单引号" | "引号" => Some(0xDE),
+        "," | "，" | "COMMA" | "逗号" => Some(0xBC),
+        "." | "。" | "DOT" | "PERIOD" | "句号" => Some(0xBE),
+        "/" | "／" | "SLASH" | "斜杠" => Some(0xBF),
+        "[" | "【" | "LBRACKET" | "LEFTBRACKET" | "左方括号" => Some(0xDB),
+        "]" | "】" | "RBRACKET" | "RIGHTBRACKET" | "右方括号" => Some(0xDD),
+        "\\" | "BACKSLASH" | "反斜杠" => Some(0xDC),
+        "`" | "~" | "·" | "BACKQUOTE" | "GRAVE" | "TILDE" | "反引号" => Some(0xC0),
         "PRINTSCREEN" | "PRTSC" | "截图" | "打印屏幕" => Some(0x2C),
         "LWIN" | "WIN" | "META" | "左WIN" | "窗口" | "左窗口" => Some(0x5B),
         "RWIN" | "右WIN" | "右窗口" => Some(0x5C),
-        _ => parse_function_key(&normalized),
+        _ => parse_numpad_key(&normalized).or_else(|| parse_function_key(&normalized)),
+    }
+}
+
+fn parse_numpad_key(name: &str) -> Option<u16> {
+    match name {
+        "NUM0" | "NUMPAD0" => Some(0x60),
+        "NUM1" | "NUMPAD1" => Some(0x61),
+        "NUM2" | "NUMPAD2" => Some(0x62),
+        "NUM3" | "NUMPAD3" => Some(0x63),
+        "NUM4" | "NUMPAD4" => Some(0x64),
+        "NUM5" | "NUMPAD5" => Some(0x65),
+        "NUM6" | "NUMPAD6" => Some(0x66),
+        "NUM7" | "NUMPAD7" => Some(0x67),
+        "NUM8" | "NUMPAD8" => Some(0x68),
+        "NUM9" | "NUMPAD9" => Some(0x69),
+        "NUM*" | "NUMMULTIPLY" | "NUMPADMULTIPLY" | "小键盘乘号" => Some(0x6A),
+        "NUMADD" | "NUMPLUS" | "NUMPADPLUS" | "小键盘加号" => Some(0x6B),
+        "NUM-" | "NUMSUBTRACT" | "NUMPADMINUS" | "小键盘减号" => Some(0x6D),
+        "NUM." | "NUMDECIMAL" | "NUMPADDECIMAL" | "小键盘小数点" => Some(0x6E),
+        "NUM/" | "NUMDIVIDE" | "NUMPADDIVIDE" | "小键盘除号" => Some(0x6F),
+        _ => None,
     }
 }
 
@@ -507,7 +624,11 @@ fn parse_function_key(name: &str) -> Option<u16> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{build_hotkey_capture, parse_virtual_key, pressed_keys_contain_virtual_key};
+    use super::{
+        build_hotkey_capture, parse_virtual_key, pressed_keys_contain_virtual_key,
+        validate_bindable_input_action,
+    };
+    use crate::core::model::InputAction;
 
     #[test]
     fn parses_alpha_keys() {
@@ -520,6 +641,17 @@ mod tests {
         assert_eq!(parse_virtual_key("Space"), Some(0x20));
         assert_eq!(parse_virtual_key("Esc"), Some(0x1B));
         assert_eq!(parse_virtual_key("Ctrl"), Some(0x11));
+    }
+
+    #[test]
+    fn parses_symbol_and_numpad_keys() {
+        assert_eq!(parse_virtual_key("/"), Some(0xBF));
+        assert_eq!(parse_virtual_key("["), Some(0xDB));
+        assert_eq!(parse_virtual_key("'"), Some(0xDE));
+        assert_eq!(parse_virtual_key("，"), Some(0xBC));
+        assert_eq!(parse_virtual_key("·"), Some(0xC0));
+        assert_eq!(parse_virtual_key("NumAdd"), Some(0x6B));
+        assert_eq!(parse_virtual_key("Num/"), Some(0x6F));
     }
 
     #[test]
@@ -557,6 +689,7 @@ mod tests {
 
         assert_eq!(capture.label, "Ctrl+Alt");
         assert!(!capture.has_non_modifier_key);
+        assert!(!capture.is_valid_binding);
     }
 
     #[test]
@@ -565,5 +698,48 @@ mod tests {
 
         assert_eq!(capture.label, "Ctrl+Alt+K");
         assert!(capture.has_non_modifier_key);
+        assert!(capture.is_valid_binding);
+    }
+
+    #[test]
+    fn capture_supports_symbol_keys_and_filters_tab_and_esc() {
+        let capture = build_hotkey_capture(&[0x10, 0xBB]).expect("capture should exist");
+        assert_eq!(capture.label, "Shift+=");
+        assert!(capture.has_non_modifier_key);
+        assert!(capture.is_valid_binding);
+
+        assert!(build_hotkey_capture(&[0x09]).is_none());
+        assert!(build_hotkey_capture(&[0x1B]).is_none());
+    }
+
+    #[test]
+    fn rejects_tab_and_esc_for_bindable_actions() {
+        let action = InputAction::KeyPress {
+            key_code: String::from("Tab"),
+        };
+
+        assert!(validate_bindable_input_action(&action).is_err());
+
+        let action = InputAction::KeyPress {
+            key_code: String::from("Esc"),
+        };
+
+        assert!(validate_bindable_input_action(&action).is_err());
+    }
+
+    #[test]
+    fn rejects_multiple_regular_keys_in_capture_and_action() {
+        let capture = build_hotkey_capture(&[0x11, 0x41, 0x31]).expect("capture should exist");
+
+        assert_eq!(capture.label, "Ctrl+A+1");
+        assert!(capture.has_non_modifier_key);
+        assert!(!capture.is_valid_binding);
+
+        let action = InputAction::KeyCombo {
+            modifiers: vec![String::from("Ctrl"), String::from("A")],
+            key_code: String::from("1"),
+        };
+
+        assert!(validate_bindable_input_action(&action).is_err());
     }
 }

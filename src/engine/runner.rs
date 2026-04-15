@@ -5,7 +5,7 @@ use crate::core::state::EngineState;
 use crate::core::validate::validate_config;
 use crate::engine::scheduler::should_stop;
 use crate::error::AppError;
-use crate::platform::windows::input::InputBackend;
+use crate::platform::windows::input::{validate_bindable_input_action, InputBackend};
 
 pub struct EngineRunner<B>
 where
@@ -38,6 +38,7 @@ where
 
     pub fn arm(&mut self, config: ClickTaskConfig) -> Result<(), AppError> {
         validate_config(&config)?;
+        validate_bindable_input_action(&config.action)?;
         self.config = Some(config);
         self.completed_actions = 0;
         self.started_at = None;

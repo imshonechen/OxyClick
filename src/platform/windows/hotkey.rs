@@ -4,7 +4,8 @@ use crate::core::model::HotkeyBindings;
 use crate::error::AppError;
 use crate::platform::windows::hook::{HookMode, HookStatus, LowLevelKeyboardHook};
 use crate::platform::windows::input::{
-    is_hotkey_virtual_key_down, parse_virtual_key, pressed_keys_contain_virtual_key,
+    is_bindable_virtual_key, is_hotkey_virtual_key_down, is_modifier_virtual_key,
+    parse_virtual_key, pressed_keys_contain_virtual_key,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +86,7 @@ impl HotkeyChord {
         }
 
         let mut keys = Vec::new();
+        let mut non_modifier_key_count = 0_usize;
         for part in trimmed.split('+') {
             let token = part.trim();
             if token.is_empty() {
@@ -101,6 +103,17 @@ impl HotkeyChord {
                 ))
             })?;
 
+            if !is_bindable_virtual_key(virtual_key) {
+                return Err(AppError::HotkeyRegisterFailed(format!(
+                    "{}热键不支持设置该按键：{token}",
+                    hotkey_kind_label(kind)
+                )));
+            }
+
+            if !is_modifier_virtual_key(virtual_key) {
+                non_modifier_key_count += 1;
+            }
+
             if !keys.contains(&virtual_key) {
                 keys.push(virtual_key);
             }
@@ -109,6 +122,20 @@ impl HotkeyChord {
         if keys.is_empty() {
             return Err(AppError::HotkeyRegisterFailed(format!(
                 "{}热键至少要包含一个按键",
+                hotkey_kind_label(kind)
+            )));
+        }
+
+        if non_modifier_key_count == 0 {
+            return Err(AppError::HotkeyRegisterFailed(format!(
+                "{}热键不能只使用 Ctrl / Alt / Shift / Win，至少要有一个常规键",
+                hotkey_kind_label(kind)
+            )));
+        }
+
+        if non_modifier_key_count > 1 {
+            return Err(AppError::HotkeyRegisterFailed(format!(
+                "{}热键只能包含一个常规键，Ctrl / Alt / Shift / Win 可同时作为修饰键",
                 hotkey_kind_label(kind)
             )));
         }
@@ -338,5 +365,46 @@ mod tests {
         };
 
         assert!(registration.register().is_err());
+    }
+
+    #[test]
+    fn accepts_symbol_hotkeys() {
+        let registration = HotkeyRegistration {
+            start_hotkey: String::from("Ctrl+/"),
+            stop_hotkey: String::from("Shift+["),
+            panic_hotkey: Some(String::from("NumAdd")),
+        };
+
+        assert!(registration.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_tab_and_esc_hotkeys() {
+        let registration = HotkeyRegistration {
+            start_hotkey: String::from("Tab"),
+            stop_hotkey: String::from("F7"),
+            panic_hotkey: None,
+        };
+
+        assert!(registration.validate().is_err());
+
+        let registration = HotkeyRegistration {
+            start_hotkey: String::from("Esc"),
+            stop_hotkey: String::from("F7"),
+            panic_hotkey: None,
+        };
+
+        assert!(registration.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_multiple_regular_keys_in_hotkeys() {
+        let registration = HotkeyRegistration {
+            start_hotkey: String::from("Ctrl+A+1"),
+            stop_hotkey: String::from("F7"),
+            panic_hotkey: None,
+        };
+
+        assert!(registration.validate().is_err());
     }
 }

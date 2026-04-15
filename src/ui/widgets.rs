@@ -240,6 +240,27 @@ pub fn hotkey_capture_field(
     let desired_width = FORM_TEXT_WIDTH.min(ui.available_width()).max(140.0);
     let desired_size = egui::vec2(desired_width, 30.0);
     let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+    let has_focus = ui.memory_mut(|memory| {
+        memory.interested_in_focus(response.id);
+        memory.has_focus(response.id)
+    });
+
+    if response.clicked() {
+        response.request_focus();
+    }
+
+    if is_recording && has_focus {
+        ui.memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    tab: true,
+                    escape: true,
+                    ..Default::default()
+                },
+            );
+        });
+    }
 
     let has_value = value.is_some_and(|text| !text.trim().is_empty());
     let display_text = value.unwrap_or(placeholder);
@@ -249,6 +270,16 @@ pub fn hotkey_capture_field(
             theme::primary_soft(),
             egui::Stroke::new(1.0, theme::primary()),
             theme::primary_dark(),
+        )
+    } else if has_focus {
+        (
+            theme::surface(),
+            egui::Stroke::new(1.0, theme::primary_soft_border()),
+            if has_value {
+                theme::text_primary()
+            } else {
+                theme::text_secondary()
+            },
         )
     } else if response.hovered() {
         (

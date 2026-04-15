@@ -16,7 +16,9 @@ use crate::engine::runner::EngineRunner;
 use crate::error::AppError;
 use crate::platform::windows::focus::current_foreground_window;
 use crate::platform::windows::hotkey::{GlobalHotkeyManager, HotkeyRegistration};
-use crate::platform::windows::input::{poll_hotkey_capture, BackendMode, WindowsInputBackend};
+use crate::platform::windows::input::{
+    poll_hotkey_capture, validate_bindable_input_action, BackendMode, WindowsInputBackend,
+};
 use crate::ui::panels::{render_status_panel, StatusPanelData};
 use crate::ui::theme;
 use crate::ui::widgets::{
@@ -99,6 +101,7 @@ struct ShortcutCaptureState {
     preview_label: Option<String>,
     last_valid_label: Option<String>,
     saw_pressed_keys: bool,
+    paused_by_focus_loss: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -477,6 +480,7 @@ impl Application {
     ) -> Result<(), AppError> {
         let profile = self.config.active_profile();
         validate_config(profile)?;
+        validate_bindable_input_action(&profile.action)?;
         hotkey_registration.validate()
     }
 
@@ -508,6 +512,7 @@ impl Application {
             preview_label: None,
             last_valid_label: None,
             saw_pressed_keys: false,
+            paused_by_focus_loss: false,
         });
     }
 
@@ -573,7 +578,7 @@ impl Application {
             Some(chord) => {
                 capture.saw_pressed_keys = true;
 
-                if chord.has_non_modifier_key {
+                if chord.has_non_modifier_key && chord.is_valid_binding {
                     capture.preview_label = Some(chord.label.clone());
                     capture.last_valid_label = Some(chord.label);
                 } else if capture.last_valid_label.is_none() {
@@ -595,6 +600,19 @@ impl Application {
         }
     }
 
+    fn reset_capture_progress(capture: &mut ShortcutCaptureState) {
+        capture.preview_label = None;
+        capture.last_valid_label = None;
+        capture.saw_pressed_keys = false;
+    }
+
+    fn capture_can_poll_input(ctx: &egui::Context) -> bool {
+        match current_foreground_window() {
+            Some(window) => window.belongs_to_current_process(),
+            None => ctx.input(|input| input.focused),
+        }
+    }
+
     fn update_capture_state(&mut self, ctx: &egui::Context) {
         if self.capture_state.is_none() {
             return;
@@ -602,10 +620,31 @@ impl Application {
 
         ctx.request_repaint_after(Duration::from_millis(16));
 
-        let snapshot = poll_hotkey_capture();
+        let can_poll_input = Self::capture_can_poll_input(ctx);
+        if can_poll_input
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.capture_state = None;
+            return;
+        }
+
         let mut completed_capture = None;
 
         if let Some(capture) = &mut self.capture_state {
+            if !can_poll_input {
+                if !capture.paused_by_focus_loss {
+                    Self::reset_capture_progress(capture);
+                    capture.paused_by_focus_loss = true;
+                }
+                return;
+            }
+
+            if capture.paused_by_focus_loss {
+                Self::reset_capture_progress(capture);
+                capture.paused_by_focus_loss = false;
+            }
+
+            let snapshot = poll_hotkey_capture();
             completed_capture = Self::advance_capture_state(capture, snapshot);
         }
 
@@ -1071,7 +1110,7 @@ impl Application {
 
                             form_note_row(
                                 ui,
-                                "单键和组合键统一在这里录制。\n单独按 Ctrl / Alt / Shift / Win 不会保存；需要再配合其他键。\n点击输入框后直接按键，点击其他位置可取消。",
+                                "单键和组合键统一在这里录制。\n单独按 Ctrl / Alt / Shift / Win 不会保存；需要再配合其他键。\n常规键只能有一个；Ctrl / Alt / Shift / Win 可以多个并作为修饰键。\nTab / Esc 不会保存，Esc 可立即取消当前录制。\n切到其他程序窗口时会暂停录制，回到本程序窗口后继续。\n点击输入框后直接按键，点击其他位置可取消。",
                             );
                         }
                     }
@@ -1221,7 +1260,7 @@ impl Application {
 
                     form_note_row(
                         ui,
-                        "点击输入框后直接按下快捷键。\n单独按 Ctrl / Alt / Shift / Win 不会保存；需要再配合其他键。\n再次点击当前输入框或点击其他位置可取消录制，紧急停止支持清空。",
+                        "点击输入框后直接按下快捷键。\n单独按 Ctrl / Alt / Shift / Win 不会保存；需要再配合其他键。\n常规键只能有一个；Ctrl / Alt / Shift / Win 可以多个并作为修饰键。\nTab / Esc 不会保存，Esc 可立即取消当前录制。\n切到其他程序窗口时会暂停录制，回到本程序窗口后继续。\n再次点击当前输入框或点击其他位置可取消录制，紧急停止支持清空。",
                     );
 
                     form_row(ui, "安全选项", |ui| {
@@ -1462,6 +1501,7 @@ mod tests {
             preview_label: None,
             last_valid_label: None,
             saw_pressed_keys: false,
+            paused_by_focus_loss: false,
         };
 
         assert_eq!(
@@ -1470,6 +1510,7 @@ mod tests {
                 Some(HotkeyCapture {
                     label: String::from("Ctrl+Alt+K"),
                     has_non_modifier_key: true,
+                    is_valid_binding: true,
                 }),
             ),
             None
@@ -1482,6 +1523,7 @@ mod tests {
                 Some(HotkeyCapture {
                     label: String::from("Ctrl+Alt"),
                     has_non_modifier_key: false,
+                    is_valid_binding: false,
                 }),
             ),
             None
@@ -1504,6 +1546,7 @@ mod tests {
             preview_label: None,
             last_valid_label: None,
             saw_pressed_keys: false,
+            paused_by_focus_loss: false,
         };
 
         assert_eq!(
@@ -1512,6 +1555,7 @@ mod tests {
                 Some(HotkeyCapture {
                     label: String::from("Ctrl+Shift"),
                     has_non_modifier_key: false,
+                    is_valid_binding: false,
                 }),
             ),
             None
@@ -1521,6 +1565,50 @@ mod tests {
         assert_eq!(Application::advance_capture_state(&mut capture, None), None);
         assert_eq!(capture.preview_label, None);
         assert!(capture.last_valid_label.is_none());
+    }
+
+    #[test]
+    fn reset_capture_progress_clears_partial_recording_state() {
+        let mut capture = ShortcutCaptureState {
+            target: CaptureTarget::Action,
+            preview_label: Some(String::from("Ctrl+K")),
+            last_valid_label: Some(String::from("Ctrl+K")),
+            saw_pressed_keys: true,
+            paused_by_focus_loss: false,
+        };
+
+        Application::reset_capture_progress(&mut capture);
+
+        assert_eq!(capture.preview_label, None);
+        assert_eq!(capture.last_valid_label, None);
+        assert!(!capture.saw_pressed_keys);
+    }
+
+    #[test]
+    fn invalid_multi_regular_capture_does_not_commit() {
+        let mut capture = ShortcutCaptureState {
+            target: CaptureTarget::Hotkey(HotkeyField::Start),
+            preview_label: None,
+            last_valid_label: None,
+            saw_pressed_keys: false,
+            paused_by_focus_loss: false,
+        };
+
+        assert_eq!(
+            Application::advance_capture_state(
+                &mut capture,
+                Some(HotkeyCapture {
+                    label: String::from("Ctrl+A+1"),
+                    has_non_modifier_key: true,
+                    is_valid_binding: false,
+                }),
+            ),
+            None
+        );
+        assert_eq!(capture.preview_label.as_deref(), Some("Ctrl+A+1"));
+        assert!(capture.last_valid_label.is_none());
+
+        assert_eq!(Application::advance_capture_state(&mut capture, None), None);
     }
 }
 
