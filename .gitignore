@@ -1,5 +1,10 @@
 /target/
 
+# Vendored crates
+/vendor/**/target/
+/vendor/**/.cargo-ok
+/vendor/**/.cargo_vcs_info.json
+
 # Editor / IDE
 /.vscode/
 /.idea/

@@ -11,7 +11,7 @@
 - 可自定义全局热键
 - 低级键盘钩子优先、轮询回退的热键后端
 - TOML 配置读写与旧配置迁移
-- 中文界面、CJK 字体加载、Release 无控制台窗口
+- 中文界面、内置 CJK 字体、Release 无控制台窗口
 
 ## 2. 当前实现快照
 
@@ -49,12 +49,12 @@
 | 领域 | 当前方案 | 说明 |
 | --- | --- | --- |
 | 语言 | Rust 2021 | 类型安全、适合状态控制和桌面工具 |
-| GUI | `eframe / egui` | 迭代快，适合工具型应用 |
+| GUI | `eframe / egui` + 本地 `vendor/eframe` 补丁 | 继续沿用现有 GUI 框架，并对鼠标移动重绘做定制优化 |
 | 输入注入 | Windows `SendInput` | 使用原生输入 API 发送真实输入事件 |
 | 全局热键 | Low-Level Keyboard Hook + `GetAsyncKeyState` 回退 | 先尝试高兼容钩子，失败时退回轮询 |
 | 配置序列化 | `serde + toml` | 配置可读、易迁移 |
 | Windows API 绑定 | `windows-sys` | 直接访问底层 Win32 能力 |
-| 中文字体 | 运行时加载系统 CJK 字体 | 避免中文乱码 |
+| 中文字体 | 内置 `assets/Font/LXGWNeoXiHei.ttf` | 避免中文乱码，并降低运行时字体探测与内存占用 |
 | Release 形态 | `windows_subsystem = "windows"` | 发布版不弹出终端窗口 |
 
 说明：
@@ -65,6 +65,12 @@
 ## 4. 当前目录结构
 
 ```text
+build.rs
+Cargo.toml
+assets/
+  app.ico
+  Font/
+    LXGWNeoXiHei.ttf
 src/
   main.rs
   lib.rs
@@ -87,6 +93,7 @@ src/
   platform/
     mod.rs
     windows/
+      focus.rs
       hook.rs
       hotkey.rs
       input.rs
@@ -100,6 +107,8 @@ config/
   config.toml
 docs/
   TECH.md
+vendor/
+  eframe/
 ```
 
 ## 5. 核心数据模型
@@ -314,7 +323,8 @@ panic = "Ctrl+Alt+Pause"
 
 - 浅色背景 + 蓝色主色
 - 圆角卡片与按钮
-- Windows 系统 CJK 字体优先加载
+- 内置 `LXGWNeoXiHei.ttf` 作为界面字体
+- 关闭阴影、动画与部分抗锯齿，尽量压低空闲与悬停时的渲染开销
 - Release 版不显示终端窗口
 
 ### 7.5 当前布局策略
@@ -375,6 +385,7 @@ panic = "Ctrl+Alt+Pause"
 - `EngineRunner` 内部启动专用执行线程
 - UI 通过通道发送 `arm / start / stop` 指令
 - 执行线程按间隔与抖动规则独立发送输入动作
+- 窗口聚焦时会关闭界面外原始鼠标移动事件；界面内普通鼠标移动则做节流重绘
 
 这意味着：
 

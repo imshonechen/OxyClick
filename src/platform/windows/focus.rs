@@ -10,6 +10,33 @@ impl ForegroundWindow {
     }
 }
 
+pub fn disable_raw_mouse_device_events() -> bool {
+    #[cfg(windows)]
+    {
+        use std::{mem::size_of, ptr};
+        use windows_sys::Win32::UI::Input::{
+            RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_REMOVE,
+        };
+
+        const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
+        const HID_USAGE_GENERIC_MOUSE: u16 = 0x02;
+
+        let device = RAWINPUTDEVICE {
+            usUsagePage: HID_USAGE_PAGE_GENERIC,
+            usUsage: HID_USAGE_GENERIC_MOUSE,
+            dwFlags: RIDEV_REMOVE,
+            hwndTarget: ptr::null_mut(),
+        };
+
+        unsafe { RegisterRawInputDevices(&device, 1, size_of::<RAWINPUTDEVICE>() as u32) != 0 }
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 pub fn current_foreground_window() -> Option<ForegroundWindow> {
     #[cfg(windows)]
     {

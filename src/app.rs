@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::error::Error;
-use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -15,7 +14,9 @@ use crate::core::state::EngineState;
 use crate::core::validate::validate_config;
 use crate::engine::runner::{EngineEvent, EngineRunner};
 use crate::error::AppError;
-use crate::platform::windows::focus::current_foreground_window;
+use crate::platform::windows::focus::{
+    current_foreground_window, disable_raw_mouse_device_events,
+};
 use crate::platform::windows::hotkey::{GlobalHotkeyManager, HotkeyRegistration};
 use crate::platform::windows::input::{
     poll_hotkey_capture, validate_bindable_input_action, BackendMode, WindowsInputBackend,
@@ -32,6 +33,8 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 680.0;
 const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const SAVE_BUTTON_FEEDBACK_DURATION: Duration = Duration::from_secs(1);
+const RUNNING_REPAINT_INTERVAL: Duration = Duration::from_millis(100);
+const SAVE_FEEDBACK_REPAINT_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct Application {
     config: AppConfig,
@@ -254,6 +257,32 @@ impl Application {
             .is_some_and(|started_at| started_at.elapsed() >= SAVE_BUTTON_FEEDBACK_DURATION)
         {
             self.save_button_feedback_started_at = None;
+        }
+    }
+
+    fn schedule_transient_repaint(&self, ctx: &egui::Context) {
+        let now = Instant::now();
+        let mut next_repaint = self.is_running().then_some(RUNNING_REPAINT_INTERVAL);
+
+        if self.save_button_feedback_started_at.is_some() {
+            next_repaint = Some(
+                next_repaint
+                    .map(|delay| delay.min(SAVE_FEEDBACK_REPAINT_INTERVAL))
+                    .unwrap_or(SAVE_FEEDBACK_REPAINT_INTERVAL),
+            );
+        }
+
+        if let Some(notification) = &self.notification {
+            let remaining = notification.expires_at.saturating_duration_since(now);
+            next_repaint = Some(
+                next_repaint
+                    .map(|delay| delay.min(remaining))
+                    .unwrap_or(remaining),
+            );
+        }
+
+        if let Some(delay) = next_repaint {
+            ctx.request_repaint_after(delay);
         }
     }
 
@@ -1484,6 +1513,10 @@ pub fn run() -> Result<(), AppError> {
         "OxyClick",
         native_options,
         Box::new(|creation_context| {
+            // eframe/winit repaints on raw mouse motion while the window is focused,
+            // even when the pointer is outside the client area. We don't use relative
+            // mouse motion, so disable that source of extra redraws.
+            let _ = disable_raw_mouse_device_events();
             configure_visuals(&creation_context.egui_ctx);
             let app = Application::bootstrap()
                 .map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)?;
@@ -1507,17 +1540,20 @@ fn configure_behavior(ctx: &egui::Context) {
         options.zoom_with_keyboard = false;
         options.scroll_zoom_speed = 0.0;
     });
+    ctx.tessellation_options_mut(|options| {
+        // Favor lower triangle counts over edge smoothing to reduce hover-time redraw cost.
+        options.feathering = false;
+        options.feathering_size_in_pixels = 0.0;
+    });
 }
 
 fn configure_fonts(ctx: &egui::Context) {
-    let Some(font_bytes) = load_cjk_font_bytes() else {
-        return;
-    };
-
-    let mut fonts = egui::FontDefinitions::default();
+    // We already load a Windows system font, so skip egui's bundled fonts to
+    // keep the runtime font set lighter.
+    let mut fonts = egui::FontDefinitions::empty();
     fonts.font_data.insert(
         String::from("system_cjk"),
-        egui::FontData::from_owned(font_bytes),
+        egui::FontData::from_static(include_bytes!("../assets/Font/LXGWNeoXiHei.ttf")),
     );
 
     if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
@@ -1528,22 +1564,6 @@ fn configure_fonts(ctx: &egui::Context) {
     }
 
     ctx.set_fonts(fonts);
-}
-
-fn load_cjk_font_bytes() -> Option<Vec<u8>> {
-    let fonts_dir = std::env::var_os("WINDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
-        .join("Fonts");
-
-    let candidates = [
-        fonts_dir.join("simhei.ttf"),
-        fonts_dir.join("msyh.ttc"),
-        fonts_dir.join("msyhbd.ttc"),
-        fonts_dir.join("simsun.ttc"),
-    ];
-
-    candidates.iter().find_map(|path| fs::read(path).ok())
 }
 
 include!(concat!(env!("OUT_DIR"), "/app_icon.rs"));
@@ -1777,13 +1797,7 @@ impl eframe::App for Application {
         self.pump_focus_stop_guard(ctx);
         self.pump_engine_events();
 
-        if self.save_button_feedback_started_at.is_some()
-            || self.is_running()
-            || self.has_pending_start()
-            || self.notification.is_some()
-        {
-            ctx.request_repaint_after(Duration::from_millis(16));
-        }
+        self.schedule_transient_repaint(ctx);
 
         let (top_fill, top_stroke) = if self.is_running() {
             (

@@ -7,12 +7,15 @@ pub const SECTION_GAP: f32 = 14.0;
 
 pub fn apply(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
+    style.animation_time = 0.0;
     style.spacing.item_spacing = egui::vec2(14.0, 10.0);
     style.spacing.button_padding = egui::vec2(12.0, 8.0);
     style.spacing.interact_size = egui::vec2(40.0, 32.0);
     style.spacing.indent = 18.0;
 
     let mut visuals = egui::Visuals::light();
+    visuals.window_shadow = egui::epaint::Shadow::NONE;
+    visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals.window_fill = app_background();
     visuals.panel_fill = app_background();
     visuals.faint_bg_color = subtle_background();
@@ -38,11 +41,13 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, primary_soft_border());
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, text_primary());
     visuals.widgets.hovered.rounding = egui::Rounding::same(CORNER_RADIUS);
+    visuals.widgets.hovered.expansion = 0.0;
     visuals.widgets.active.bg_fill = primary_soft();
     visuals.widgets.active.weak_bg_fill = primary_soft();
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, primary());
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, text_primary());
     visuals.widgets.active.rounding = egui::Rounding::same(CORNER_RADIUS);
+    visuals.widgets.active.expansion = 0.0;
     visuals.widgets.open.bg_fill = primary_soft();
     visuals.widgets.open.weak_bg_fill = primary_soft();
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, primary_soft_border());
@@ -54,12 +59,7 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 pub fn card_shadow() -> egui::epaint::Shadow {
-    egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 6.0),
-        blur: 18.0,
-        spread: 0.0,
-        color: Color32::from_black_alpha(18),
-    }
+    egui::epaint::Shadow::NONE
 }
 
 pub fn app_background() -> Color32 {
