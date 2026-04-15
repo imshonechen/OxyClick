@@ -1137,7 +1137,6 @@ impl Application {
     }
 
     fn render_hotkeys(&mut self, ui: &mut egui::Ui, target_height: f32) -> f32 {
-        let mut minimize_to_tray = self.config.general.minimize_to_tray;
         let start_hotkey = self.config.active_profile().hotkeys.start.clone();
         let stop_hotkey = self.config.active_profile().hotkeys.stop.clone();
         let mut panic_hotkey = self.config.active_profile().hotkeys.panic.clone();
@@ -1267,17 +1266,12 @@ impl Application {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
                             ui.checkbox(&mut stop_on_focus_lost, "目标窗口失去焦点时自动停止");
-                            ui.checkbox(
-                                &mut minimize_to_tray,
-                                "后续接入托盘功能后允许最小化到托盘",
-                            );
                         });
                     });
                 });
             },
         );
 
-        self.config.general.minimize_to_tray = minimize_to_tray;
         let profile = self.config.active_profile_mut();
         profile.hotkeys.panic = panic_hotkey;
         profile.stop_on_focus_lost = stop_on_focus_lost;

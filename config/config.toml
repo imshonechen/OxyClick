@@ -2,7 +2,6 @@ active_profile_index = 0
 
 [general]
 launch_on_startup = false
-minimize_to_tray = true
 stop_on_focus_lost = true
 
 [[profiles]]

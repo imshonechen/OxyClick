@@ -41,7 +41,6 @@
 
 ### 2.3 当前未完成但已预留
 
-- 真正的系统托盘功能
 - 独立执行线程
 - 图形化日志面板
 - 多配置数据结构已经保留，后续计划补多预设管理界面
@@ -194,7 +193,6 @@ pub struct ClickTaskConfig {
 ```rust
 pub struct GeneralConfig {
     pub launch_on_startup: bool,
-    pub minimize_to_tray: bool,
     pub stop_on_focus_lost: bool,
 }
 
@@ -208,7 +206,6 @@ pub struct AppConfig {
 说明：
 
 - 当前 UI 只编辑活动配置，但底层结构已经保留 `profiles` 列表。
-- `minimize_to_tray` 目前是预留字段，还没有真正接入托盘能力。
 
 ## 6. 配置系统
 
@@ -247,7 +244,6 @@ active_profile_index = 0
 
 [general]
 launch_on_startup = false
-minimize_to_tray = true
 stop_on_focus_lost = true
 
 [[profiles]]
@@ -513,7 +509,6 @@ cargo run --release -- --layout-debug
 ## 13. 已知边界
 
 - 当前仅支持 Windows
-- 当前没有真正的托盘功能
 - 当前执行调度仍由 UI 循环驱动，不是独立线程
 - 当前没有完整日志系统或历史记录面板
 - 当前多配置结构已存在，但 GUI 尚未提供完整预设切换管理
@@ -523,7 +518,6 @@ cargo run --release -- --layout-debug
 ### 14.1 功能层
 
 - 多预设管理界面
-- 真正的托盘运行
 - 导入导出配置
 - 更丰富的输入动作序列
 - Burst 模式与更自然的抖动
@@ -542,6 +536,6 @@ cargo run --release -- --layout-debug
 
 接下来最值得继续投入的方向有三类：
 
-- 把“预留项”做实，例如托盘、日志与诊断
+- 把“预留项”做实，例如日志与诊断
 - 把“当前可用”做稳，例如时序调度、热键兼容、错误提示
 - 把“输入能力”做深，例如动作序列、导入导出、更多诊断信息

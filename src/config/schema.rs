@@ -8,7 +8,6 @@ use crate::error::AppError;
 #[serde(default)]
 pub struct GeneralConfig {
     pub launch_on_startup: bool,
-    pub minimize_to_tray: bool,
     pub stop_on_focus_lost: bool,
 }
 
@@ -16,7 +15,6 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             launch_on_startup: false,
-            minimize_to_tray: true,
             stop_on_focus_lost: true,
         }
     }
@@ -140,7 +138,6 @@ active_profile_index = 0
 
 [general]
 launch_on_startup = false
-minimize_to_tray = true
 stop_on_focus_lost = true
 
 [[profiles]]
