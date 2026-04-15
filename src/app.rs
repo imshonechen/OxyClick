@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
@@ -51,6 +52,7 @@ pub struct Application {
     hotkeys_actual_height: f32,
     capture_state: Option<ShortcutCaptureState>,
     focus_stop_guard: Option<FocusStopGuard>,
+    numeric_input_ids: HashSet<egui::Id>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +178,7 @@ impl Application {
             hotkeys_actual_height: 0.0,
             capture_state: None,
             focus_stop_guard: None,
+            numeric_input_ids: HashSet::new(),
         })
     }
 
@@ -705,6 +708,44 @@ impl Application {
         }
     }
 
+    fn register_numeric_input(&mut self, response: &egui::Response) {
+        self.numeric_input_ids.insert(response.id);
+    }
+
+    fn should_block_egui_key(
+        key: egui::Key,
+        is_capturing_shortcut: bool,
+        allow_vertical_arrows: bool,
+    ) -> bool {
+        match key {
+            egui::Key::Tab
+            | egui::Key::ArrowLeft
+            | egui::Key::ArrowRight
+            | egui::Key::Enter
+            | egui::Key::Space => true,
+            egui::Key::ArrowUp | egui::Key::ArrowDown => !allow_vertical_arrows,
+            egui::Key::Escape => !is_capturing_shortcut,
+            _ => false,
+        }
+    }
+
+    fn filter_egui_keyboard_events(
+        raw_input: &mut egui::RawInput,
+        is_capturing_shortcut: bool,
+        focused_id: Option<egui::Id>,
+        numeric_input_ids: &HashSet<egui::Id>,
+    ) {
+        let allow_vertical_arrows = focused_id.is_some_and(|id| numeric_input_ids.contains(&id));
+
+        raw_input.events.retain(|event| {
+            let egui::Event::Key { key, .. } = event else {
+                return true;
+            };
+
+            !Self::should_block_egui_key(*key, is_capturing_shortcut, allow_vertical_arrows)
+        });
+    }
+
     fn can_accept_stop(&self) -> bool {
         self.started_running_at
             .map(|started_at| started_at.elapsed() >= Duration::from_millis(250))
@@ -728,7 +769,10 @@ impl Application {
                 if self.is_running() && self.can_accept_stop() && self.stop_engine() {
                     self.push_notification(
                         NotificationKind::Info,
-                        format!("已停止。本次一共执行了 {} 次。", self.last_completed_actions),
+                        format!(
+                            "已停止。本次一共执行了 {} 次。",
+                            self.last_completed_actions
+                        ),
                     );
                 }
             }
@@ -1020,10 +1064,12 @@ impl Application {
                     match &mut profile.run_mode {
                         RunMode::Infinite => {}
                         RunMode::Count { total } => {
-                            number_row(ui, "次数", total, " 次", 1.0);
+                            let response = number_row(ui, "次数", total, " 次", 1.0);
+                            self.register_numeric_input(&response);
                         }
                         RunMode::Timed { duration_ms } => {
-                            number_row(ui, "时长", duration_ms, " ms", 50.0);
+                            let response = number_row(ui, "时长", duration_ms, " ms", 50.0);
+                            self.register_numeric_input(&response);
                         }
                     }
 
@@ -1115,15 +1161,22 @@ impl Application {
                         }
                     }
 
-                    number_row(ui, "间隔", &mut profile.interval_ms, " ms", 1.0);
-                    number_row(ui, "按下时长", &mut profile.press_duration_ms, " ms", 1.0);
+                    let interval_response =
+                        number_row(ui, "间隔", &mut profile.interval_ms, " ms", 1.0);
+                    self.register_numeric_input(&interval_response);
+
+                    let press_duration_response =
+                        number_row(ui, "按下时长", &mut profile.press_duration_ms, " ms", 1.0);
+                    self.register_numeric_input(&press_duration_response);
 
                     let jitter = profile.jitter_ms.get_or_insert(0);
-                    number_row(ui, "抖动", jitter, " ms", 1.0);
+                    let jitter_response = number_row(ui, "抖动", jitter, " ms", 1.0);
+                    self.register_numeric_input(&jitter_response);
 
-                    form_row(ui, "启动前延迟", |ui| {
-                        number_field(ui, &mut profile.start_delay_ms, " ms", 50.0);
+                    let start_delay_response = form_row(ui, "启动前延迟", |ui| {
+                        number_field(ui, &mut profile.start_delay_ms, " ms", 50.0)
                     });
+                    self.register_numeric_input(&start_delay_response);
                     form_note_row(
                         ui,
                         "仅在通过界面上的“开始运行”时生效。\n用于预留切回目标窗口或移开鼠标的时间；设为 0 可关闭。",
@@ -1443,7 +1496,16 @@ pub fn run() -> Result<(), AppError> {
 
 fn configure_visuals(ctx: &egui::Context) {
     configure_fonts(ctx);
+    configure_behavior(ctx);
     theme::apply(ctx);
+}
+
+fn configure_behavior(ctx: &egui::Context) {
+    ctx.options_mut(|options| {
+        // OxyClick uses Ctrl-based shortcuts itself, so disable egui's built-in UI zoom gestures.
+        options.zoom_with_keyboard = false;
+        options.scroll_zoom_speed = 0.0;
+    });
 }
 
 fn configure_fonts(ctx: &egui::Context) {
@@ -1487,6 +1549,8 @@ fn load_cjk_font_bytes() -> Option<Vec<u8>> {
 mod tests {
     use super::{Application, CaptureTarget, HotkeyField, ShortcutCaptureState};
     use crate::platform::windows::input::HotkeyCapture;
+    use eframe::egui;
+    use std::collections::HashSet;
 
     #[test]
     fn capture_keeps_last_valid_combo_until_release() {
@@ -1604,13 +1668,100 @@ mod tests {
 
         assert_eq!(Application::advance_capture_state(&mut capture, None), None);
     }
+
+    #[test]
+    fn egui_keyboard_filter_blocks_default_focus_navigation_and_activation() {
+        let mut raw_input = egui::RawInput {
+            events: vec![
+                key_event(egui::Key::Tab),
+                key_event(egui::Key::ArrowUp),
+                key_event(egui::Key::ArrowLeft),
+                key_event(egui::Key::Enter),
+                key_event(egui::Key::Space),
+                key_event(egui::Key::Escape),
+                key_event(egui::Key::A),
+            ],
+            ..Default::default()
+        };
+
+        Application::filter_egui_keyboard_events(&mut raw_input, false, None, &HashSet::new());
+
+        assert_eq!(raw_input.events, vec![key_event(egui::Key::A)]);
+    }
+
+    #[test]
+    fn egui_keyboard_filter_keeps_escape_for_capture_cancel() {
+        let mut raw_input = egui::RawInput {
+            events: vec![key_event(egui::Key::Escape), key_event(egui::Key::A)],
+            ..Default::default()
+        };
+
+        Application::filter_egui_keyboard_events(&mut raw_input, true, None, &HashSet::new());
+
+        assert_eq!(
+            raw_input.events,
+            vec![key_event(egui::Key::Escape), key_event(egui::Key::A)]
+        );
+    }
+
+    #[test]
+    fn egui_keyboard_filter_keeps_vertical_arrows_for_numeric_inputs() {
+        let numeric_id = egui::Id::new("interval_ms");
+        let mut numeric_input_ids = HashSet::new();
+        numeric_input_ids.insert(numeric_id);
+
+        let mut raw_input = egui::RawInput {
+            events: vec![
+                key_event(egui::Key::ArrowUp),
+                key_event(egui::Key::ArrowDown),
+                key_event(egui::Key::ArrowRight),
+            ],
+            ..Default::default()
+        };
+
+        Application::filter_egui_keyboard_events(
+            &mut raw_input,
+            false,
+            Some(numeric_id),
+            &numeric_input_ids,
+        );
+
+        assert_eq!(
+            raw_input.events,
+            vec![
+                key_event(egui::Key::ArrowUp),
+                key_event(egui::Key::ArrowDown)
+            ]
+        );
+    }
+
+    fn key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
 }
 
 impl eframe::App for Application {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let focused_id = ctx.memory(|memory| memory.focused());
+        Self::filter_egui_keyboard_events(
+            raw_input,
+            self.is_capturing_shortcut(),
+            focused_id,
+            &self.numeric_input_ids,
+        );
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.expire_notification();
         self.expire_save_button_feedback();
         let config_before = self.config.clone();
+        self.numeric_input_ids.clear();
 
         if self.is_capturing_shortcut() {
             self.update_capture_state(ctx);

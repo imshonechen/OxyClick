@@ -205,10 +205,14 @@ pub fn optional_text_row(ui: &mut Ui, label: &str, value: &mut Option<String>, h
     }
 }
 
-pub fn number_row(ui: &mut Ui, label: &str, value: &mut u64, suffix: &str, speed: f64) {
-    form_row(ui, label, |ui| {
-        number_field(ui, value, suffix, speed);
-    });
+pub fn number_row(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut u64,
+    suffix: &str,
+    speed: f64,
+) -> egui::Response {
+    form_row(ui, label, |ui| number_field(ui, value, suffix, speed))
 }
 
 pub fn text_field(ui: &mut Ui, value: &mut String, hint: &str) {
@@ -221,14 +225,28 @@ pub fn text_field(ui: &mut Ui, value: &mut String, hint: &str) {
     );
 }
 
-pub fn number_field(ui: &mut Ui, value: &mut u64, suffix: &str, speed: f64) {
-    ui.add_sized(
+pub fn number_field(ui: &mut Ui, value: &mut u64, suffix: &str, speed: f64) -> egui::Response {
+    let response = ui.add_sized(
         [FORM_NUMBER_WIDTH, 30.0],
         DragValue::new(value)
             .speed(speed)
             .range(0..=u64::MAX)
             .suffix(suffix),
     );
+
+    if response.has_focus() {
+        ui.memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
+    }
+
+    response
 }
 
 pub fn hotkey_capture_field(
