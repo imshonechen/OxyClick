@@ -535,14 +535,10 @@ cargo run --release -- --layout-debug
 
 - Git 标签：`vMAJOR.MINOR.PATCH`
 - Release 标题：`OxyClick vMAJOR.MINOR.PATCH`
-- Windows 压缩包：`OxyClick-vMAJOR.MINOR.PATCH-windows-x86_64.zip`
+- Windows 可执行文件：`OxyClick-vMAJOR.MINOR.PATCH.exe`
 - SHA256 校验文件：`OxyClick-vMAJOR.MINOR.PATCH-sha256.txt`
 
-压缩包内容当前包含：
-
-- `OxyClick.exe`
-- `README.MD`
-- `config/config.toml`
+当前 Release 附件直接上传编译后的 `.exe`，不额外套一层 zip。
 
 ## 13. 已知边界
 

@@ -98,7 +98,7 @@ cargo build --release
 - 如果启动失败，程序会使用 Windows 消息框显示错误信息。
 - 仓库已支持 GitHub Actions 自动发布：推送语义化版本标签 `vMAJOR.MINOR.PATCH` 后，会在 `windows-latest` 上自动执行测试、编译 Release，并把产物同步到 GitHub Releases。
 - 当前 Release 附件命名遵循常见约定：
-  - 安装包 / 便携包：`OxyClick-v1.0.0-windows-x86_64.zip`
+  - 可执行文件：`OxyClick-v1.0.0.exe`
   - 校验文件：`OxyClick-v1.0.0-sha256.txt`
 
 ## GitHub 发布流程
@@ -127,7 +127,7 @@ git push origin v1.0.0
 - 校验标签 `v1.0.0` 是否与 `Cargo.toml` 中的 `1.0.0` 一致
 - 运行 `cargo test --locked`
 - 运行 `cargo build --locked --release`
-- 生成 `OxyClick-v1.0.0-windows-x86_64.zip`
+- 生成 `OxyClick-v1.0.0.exe`
 - 生成 `OxyClick-v1.0.0-sha256.txt`
 - 创建或更新右侧的 GitHub Release，并上传上述附件
 

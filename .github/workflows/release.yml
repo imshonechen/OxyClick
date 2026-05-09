@@ -76,28 +76,18 @@ jobs:
         shell: pwsh
         run: |
           $tagName = "${{ steps.meta.outputs.tag_name }}"
-          $assetBase = "${{ env.APP_NAME }}-$tagName-windows-x86_64"
           $distDir = "dist"
-          $packageRoot = Join-Path $distDir $assetBase
-          $configDir = Join-Path $packageRoot "config"
+          $exeName = "${{ env.APP_NAME }}-$tagName.exe"
           $binaryPath = "target/${{ env.TARGET }}/release/${{ env.BIN_NAME }}.exe"
-          $zipPath = Join-Path $distDir "$assetBase.zip"
+          $releaseExePath = Join-Path $distDir $exeName
           $checksumPath = Join-Path $distDir "${{ env.APP_NAME }}-$tagName-sha256.txt"
 
-          New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
-          Copy-Item $binaryPath (Join-Path $packageRoot "${{ env.APP_NAME }}.exe")
-          Copy-Item "README.MD" (Join-Path $packageRoot "README.MD")
-          Copy-Item "config/config.toml" (Join-Path $configDir "config.toml")
+          Copy-Item $binaryPath $releaseExePath -Force
 
-          if (Test-Path $zipPath) {
-            Remove-Item -LiteralPath $zipPath -Force
-          }
-
-          Compress-Archive -Path $packageRoot -DestinationPath $zipPath -Force
-
-          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -Path $checksumPath -Value "$hash  $assetBase.zip"
+          $hash = (Get-FileHash $releaseExePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path $checksumPath -Value "$hash  $exeName"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -108,5 +98,5 @@ jobs:
           prerelease: ${{ contains(steps.meta.outputs.tag_name, '-') }}
           fail_on_unmatched_files: true
           files: |
-            dist/OxyClick-${{ steps.meta.outputs.tag_name }}-windows-x86_64.zip
+            dist/OxyClick-${{ steps.meta.outputs.tag_name }}.exe
             dist/OxyClick-${{ steps.meta.outputs.tag_name }}-sha256.txt
