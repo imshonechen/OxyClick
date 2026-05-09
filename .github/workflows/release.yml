@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: OxyClick
+  BIN_NAME: oxyclick
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.TARGET }}
+
+      - name: Verify tag matches Cargo.toml version
+        shell: pwsh
+        run: |
+          $cargoVersion = (Select-String -Path Cargo.toml -Pattern '^version = "(?<version>[^"]+)"$').Matches[0].Groups['version'].Value
+          $tagName = "${{ github.ref_name }}"
+
+          if ("v$cargoVersion" -ne $tagName) {
+            throw "Tag '$tagName' does not match Cargo.toml version '$cargoVersion'."
+          }
+
+      - name: Run tests
+        run: cargo test --locked --target ${{ env.TARGET }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ env.TARGET }}
+
+      - name: Package release assets
+        shell: pwsh
+        run: |
+          $tagName = "${{ github.ref_name }}"
+          $assetBase = "${{ env.APP_NAME }}-$tagName-windows-x86_64"
+          $distDir = "dist"
+          $packageRoot = Join-Path $distDir $assetBase
+          $configDir = Join-Path $packageRoot "config"
+          $binaryPath = "target/${{ env.TARGET }}/release/${{ env.BIN_NAME }}.exe"
+          $zipPath = Join-Path $distDir "$assetBase.zip"
+          $checksumPath = Join-Path $distDir "${{ env.APP_NAME }}-$tagName-sha256.txt"
+
+          New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+
+          Copy-Item $binaryPath (Join-Path $packageRoot "${{ env.APP_NAME }}.exe")
+          Copy-Item "README.MD" (Join-Path $packageRoot "README.MD")
+          Copy-Item "config/config.toml" (Join-Path $configDir "config.toml")
+
+          if (Test-Path $zipPath) {
+            Remove-Item -LiteralPath $zipPath -Force
+          }
+
+          Compress-Archive -Path $packageRoot -DestinationPath $zipPath -Force
+
+          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path $checksumPath -Value "$hash  $assetBase.zip"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OxyClick ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/OxyClick-${{ github.ref_name }}-windows-x86_64.zip
+            dist/OxyClick-${{ github.ref_name }}-sha256.txt

@@ -515,6 +515,35 @@ cargo run --release -- --layout-debug
 - 保存反馈现在主要通过按钮自身动画确认，不再依赖常驻通知栏。
 - 启动前延迟属于界面启动保护机制，不是调度器的一部分。
 
+### 12.4 GitHub Release 自动发布
+
+当前仓库已接入基于标签的 GitHub Actions 发布流程：
+
+- 工作流文件：`.github/workflows/release.yml`
+- 触发条件：推送 `v*` 标签
+- 运行平台：`windows-latest`
+- 目标架构：`x86_64-pc-windows-msvc`
+
+工作流会执行以下步骤：
+
+1. 校验 Git 标签与 `Cargo.toml` 版本一致，例如标签 `v1.0.0` 对应 `version = "1.0.0"`
+2. 执行 `cargo test --locked --target x86_64-pc-windows-msvc`
+3. 执行 `cargo build --locked --release --target x86_64-pc-windows-msvc`
+4. 打包 Release 附件并上传到 GitHub Releases
+
+当前产物命名约定：
+
+- Git 标签：`vMAJOR.MINOR.PATCH`
+- Release 标题：`OxyClick vMAJOR.MINOR.PATCH`
+- Windows 压缩包：`OxyClick-vMAJOR.MINOR.PATCH-windows-x86_64.zip`
+- SHA256 校验文件：`OxyClick-vMAJOR.MINOR.PATCH-sha256.txt`
+
+压缩包内容当前包含：
+
+- `OxyClick.exe`
+- `README.MD`
+- `config/config.toml`
+
 ## 13. 已知边界
 
 - 当前仅支持 Windows

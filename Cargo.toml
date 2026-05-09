@@ -1,8 +1,8 @@
 [package]
 name = "oxyclick"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
-description = "A Windows-focused mouse and keyboard auto clicker scaffold written in Rust."
+description = "A Windows-focused mouse and keyboard auto clicker built with Rust."
 license = "MIT"
 publish = false
 build = "build.rs"
